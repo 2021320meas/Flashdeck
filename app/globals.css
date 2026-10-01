@@ -20,6 +20,7 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { -webkit-text-size-adjust: 100%; }
+html, body { overflow-x: hidden; overscroll-behavior-x: none; }
 body {
   margin: 0;
   min-height: 100dvh;
@@ -37,6 +38,7 @@ a { color: inherit; text-decoration: none; }
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
   padding-bottom: calc(48px + env(safe-area-inset-bottom));
+  overflow-x: clip;
 }
 .nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
 .logo { font-weight: 800; font-size: 20px; color: var(--brand); display: inline-flex; align-items: center; }
@@ -97,8 +99,9 @@ input, textarea {
 .progress > div { height: 100%; background: var(--brand); }
 
 /* swipe */
-.swipe-wrap {
-  position: relative; margin: 12px 0 18px; touch-action: pan-y;
+.swipe-wrap { position: relative; margin: 12px 0 18px; }
+.swipe-wrap, .swipe-wrap * {
+  touch-action: pan-y;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .swipe { will-change: transform; }
