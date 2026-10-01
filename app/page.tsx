@@ -11,7 +11,7 @@ export default function Home() {
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
-
+ 
   const load = useCallback(async () => {
     const { data, error } = await supabase.from("decks").select("*, cards(count)").order("name");
     if (error) setErr(error.message);
