@@ -12,25 +12,52 @@ export const WORD_SCHEMA = {
   },
 };
 
+/** Tried in this order when the main model is overloaded or rate-limited. */
+const FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS ?? "gemini-3.5-flash-lite,gemini-3.1-flash-lite")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function askGemini(prompt: string, key: string, model: string): Promise<string> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", responseSchema: WORD_SCHEMA, temperature: 1 },
-      }),
-    });
-    if (res.ok) {
-      const j = await res.json();
-      return j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+  const models = [model, ...FALLBACKS.filter((m) => m !== model)];
+  const problems: string[] = [];
+
+  for (const m of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json", responseSchema: WORD_SCHEMA, temperature: 1 },
+          }),
+        });
+      } catch (e: any) {
+        problems.push(`${m}: network error ${e?.message ?? e}`);
+        await sleep(2000);
+        continue;
+      }
+
+      if (res.ok) {
+        const j = await res.json();
+        const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+        if (text) return text;
+        problems.push(`${m}: empty answer`);
+        break;
+      }
+
+      const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
+      problems.push(`${m}: HTTP ${res.status} ${body}`);
+      if (res.status === 429 || res.status >= 500) {
+        await sleep(3000 * (attempt + 1)); // busy – wait, retry once, then try the next model
+        continue;
+      }
+      break; // 400/403/404: this model won't work, go to the next one
     }
-    if (res.status === 429 || res.status >= 500) {
-      await new Promise((r) => setTimeout(r, 4000 * (attempt + 1)));
-      continue;
-    }
-    throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }
-  throw new Error("Gemini is busy or the free quota is used up – try again later");
+  throw new Error(`Gemini failed – ${problems.join(" | ")}`);
 }
