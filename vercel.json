@@ -2,6 +2,7 @@
   "crons": [
     { "path": "/api/cron/reminder?slot=a", "schedule": "0 14 * * *" },
     { "path": "/api/cron/reminder?slot=b", "schedule": "0 15 * * *" },
-    { "path": "/api/cron/daily-words", "schedule": "0 3 * * *" }
+    { "path": "/api/cron/daily-words", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/daily-it-words", "schedule": "0 4 * * *" }
   ]
 }
