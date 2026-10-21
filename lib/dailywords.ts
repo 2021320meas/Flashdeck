@@ -11,6 +11,22 @@ export function wordKey(w: string): string {
   return w.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * The "core" of a headword, used to spot repeats even when written differently:
+ * "die Schwachstelle, -n" = "Schwachstelle" = "die Schwachstelle";
+ * "sich verlassen auf + akk." = "verlassen auf".
+ * Accepts a whole card front too (only its first line is used).
+ */
+export function coreKey(s: string): string {
+  let k = (s ?? "").split("\n")[0].toLowerCase();
+  k = k.replace(/\(.*?\)/g, " "); // (Pl.), (Nomen)
+  k = k.split(",")[0]; // plural / genitive endings after a comma
+  k = k.replace(/\+\s*(akk|dat|gen)\.?/g, " "); // case info
+  k = k.replace(/^\s*(der|die|das)\s+/, "");
+  k = k.replace(/^\s*sich\s+/, "");
+  return k.replace(/[.!?;:]+$/g, "").replace(/\s+/g, " ").trim();
+}
+
 export function toCard(w: GeneratedWord): NewCard | null {
   const word = (w.word ?? "").trim();
   const english = (w.english ?? "").trim();
@@ -33,12 +49,14 @@ export function parseWords(raw: string, existing: Set<string>, limit: number): N
   }
   const list = Array.isArray(data) ? data : (data as any)?.words;
   if (!Array.isArray(list)) return [];
-  const seen = new Set(existing);
+  const seen = new Set(Array.from(existing).map(coreKey));
   const out: NewCard[] = [];
   for (const item of list) {
     const c = toCard(item as GeneratedWord);
-    if (!c || seen.has(c.word_key)) continue;
-    seen.add(c.word_key);
+    if (!c) continue;
+    const ck = coreKey(c.word_key);
+    if (!ck || seen.has(ck)) continue;
+    seen.add(ck);
     out.push(c);
     if (out.length >= limit) break;
   }
@@ -61,7 +79,8 @@ export function buildPrompt(count: number, level: string, avoid: string[]): stri
 export function buildItPrompt(count: number, level: string, avoid: string[]): string {
   return [
     `You are a German language coach for an IT professional preparing for job interviews in Germany.`,
-    `The learner is a penetration tester (red team) from Cambodia, English-speaking, German level about ${level} up.`,
+    `The learner is a penetration tester (red team) from Cambodia, English-speaking, German level ${level} or higher.`,
+    `Difficulty: mix levels. About half the items and sentences at ${level}, the rest clearly harder (up to C1): sentences with subordinate clauses (weil, obwohl, sodass), passive voice, Konjunktiv II for polite interview answers, and formal written style (Nominalstil) as used in reports and job ads.`,
     `They want jobs in IT security (red team AND blue team) and also related roles: system/infrastructure administration, cloud, DevOps, software development, IT support.`,
     ``,
     `Create ${count} NEW German vocabulary items. Use terms that German employers, job ads and IT teams really use.`,
@@ -75,7 +94,7 @@ export function buildItPrompt(count: number, level: string, avoid: string[]): st
     ``,
     `Rules for each item:`,
     `- "word": the German term. Nouns with article and plural, e.g. "die Schwachstelle, -n". Verbs with required preposition/case where relevant, e.g. "sich ausweisen als". Prefer the real German term; if Germans mostly say an English loanword, use the loanword (e.g. "der Pentest", "das Red Teaming").`,
-    `- "examples": exactly 2 correct, natural German sentences at level ${level} or above. Sentence 1 shows normal use at work (technical context). Sentence 2 is something the learner could say in a job interview, in the first person, about their own experience (e.g. "Ich habe in meiner bisherigen Position ...").`,
+    `- "examples": exactly 2 correct, natural German sentences at level ${level} or above (see difficulty mix). Sentence 1 shows normal use at work (technical context). Sentence 2 is something the learner could say in a job interview, in the first person, about their own experience (e.g. "Ich habe in meiner bisherigen Position ...").`,
     `- "english": short, accurate English meaning (max 6 words).`,
     `- "note": optional, one short English tip only when useful: formal vs informal, loanword used in practice, a common collocation, or a false friend. Max 15 words. Leave it out otherwise.`,
     `Do not invent terms. Do not repeat any of these words: ${avoid.length ? avoid.join(", ") : "(none yet)"}.`,

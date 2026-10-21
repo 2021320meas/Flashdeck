@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { todayStr } from "./dates";
-import { parseWords, NewCard } from "./dailywords";
+import { parseWords, coreKey, NewCard } from "./dailywords";
 import { askGemini } from "./gemini";
 
 export type DailyJobConfig = {
@@ -39,9 +39,18 @@ export async function runDailyJob(req: Request, cfg: DailyJobConfig) {
     return NextResponse.json({ skipped: "already added today", count: doneToday });
   }
 
-  const { data: old } = await admin
-    .from("cards").select("word_key").eq("deck_id", deckId).not("word_key", "is", null).limit(5000);
-  const existing = new Set<string>((old ?? []).map((r: any) => r.word_key));
+  // every headword already in ANY deck (your Anki cards included), compared by its "core" form
+  const existing = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin.from("cards").select("front").order("id").range(from, from + 999);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    for (const r of data ?? []) existing.add(coreKey(r.front as string));
+    if (!data || data.length < 1000) break;
+  }
+  // newest 500 words of THIS deck, shown to the AI so it doesn't suggest them again
+  const { data: recent } = await admin
+    .from("cards").select("front").eq("deck_id", deckId).order("created_at", { ascending: false }).limit(500);
+  const avoid = (recent ?? []).map((r: any) => String(r.front).split("\n")[0]);
 
   let need = cfg.perDay - (force ? 0 : doneToday ?? 0);
   const added: NewCard[] = [];
@@ -49,7 +58,6 @@ export async function runDailyJob(req: Request, cfg: DailyJobConfig) {
 
   for (let round = 0; round < 3 && need > 0; round++) {
     try {
-      const avoid = Array.from(existing).slice(-500);
       const raw = await askGemini(cfg.prompt(need + 4, avoid), geminiKey, cfg.model);
       const fresh = parseWords(raw, existing, need);
       if (fresh.length === 0) { lastError = "no usable words returned"; continue; }
@@ -59,8 +67,12 @@ export async function runDailyJob(req: Request, cfg: DailyJobConfig) {
         .select("word_key");
       if (error) { lastError = error.message; break; }
       const ok = new Set((inserted ?? []).map((r: any) => r.word_key as string));
-      for (const k of Array.from(ok)) existing.add(k);
-      added.push(...fresh.filter((c) => ok.has(c.word_key)));
+      const saved = fresh.filter((c) => ok.has(c.word_key));
+      for (const c of saved) {
+        existing.add(coreKey(c.word_key));
+        avoid.unshift(c.word_key);
+      }
+      added.push(...saved);
       need -= ok.size;
     } catch (e: any) {
       lastError = e.message;
