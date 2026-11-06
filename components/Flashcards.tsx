@@ -4,7 +4,10 @@ import { Card, shuffle } from "@/lib/supabase";
 import { buildSession, markSeen, SESSION_SIZE } from "@/lib/session";
 import { recordCards, useStats } from "@/lib/stats";
 import { GOAL } from "@/lib/streak";
+import { clearReview, REVIEW_DAYS, scheduleReview } from "@/lib/review";
+import { todayStr } from "@/lib/dates";
 
+const DOUBLE_TAP_MS = 300;
 const THRESH = 90; // px to drag before a swipe counts
 
 export default function Flashcards({ cards, deckId, active }: { cards: Card[]; deckId: string; active: boolean }) {
@@ -16,6 +19,10 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
   const [reverse, setReverse] = useState(false);
   const [info, setInfo] = useState({ seenBefore: 0, fresh: 0, total: 0, tracked: false });
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState("");
+  // cards scheduled for review (card id -> due date)
+  const review = useRef<Record<string, string>>({});
+  const lastTap = useRef(0);
 
   // swipe state
   const [dx, setDx] = useState(0);
@@ -33,6 +40,7 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
     setLoading(true);
     const s = await buildSession(deckId, cardsRef.current);
     setQueue(s.cards);
+    review.current = { ...s.review };
     setInfo({ seenBefore: s.seenBefore, fresh: s.fresh, total: s.total, tracked: s.tracked });
     setI(0); setFlipped(false); setKnown(0); setMissed([]); setDx(0);
     setLoading(false);
@@ -49,9 +57,15 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
   const done = !loading && queue.length > 0 && i >= queue.length;
   const card = queue[i];
 
-  const mark = useCallback((ok: boolean) => {
+  const mark = useCallback((ok: boolean, later = false) => {       // <-- added `later = false`
     if (!card) return;
     if (ok) setKnown((k) => k + 1); else setMissed((m) => [...m, card]);
+
+    // double tap -> back in 3 days; swipe left on a review card -> another 3 days;
+    // swipe right on a review card -> remove from review
+    if (later || (!ok && review.current[card.id])) review.current[card.id] = scheduleReview(card.id);   // <-- new
+    else if (ok && review.current[card.id]) { delete review.current[card.id]; clearReview(card.id); }    // <-- new
+
     if (info.tracked) markSeen(deckId, card.id);
     recordCards(1);
     setFlipped(false);
@@ -59,13 +73,13 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
   }, [card, deckId, info.tracked]);
 
   /** Animate the card off-screen, then record the answer. */
-  const commit = useCallback((dir: "left" | "right") => {
+  const commit = useCallback((dir: "left" | "right", later = false) => {
     if (busy.current || !card) return;
     busy.current = true;
     setDx(dir === "right" ? window.innerWidth : -window.innerWidth);
     setTimeout(() => {
       setSnap(true);
-      mark(dir === "right");
+      mark(dir === "right", later);
       setDx(0);
       requestAnimationFrame(() => requestAnimationFrame(() => { setSnap(false); busy.current = false; }));
     }, 200);
@@ -103,7 +117,21 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
     drag.current = null;
     setDragging(false);
     if (!d) return;
-    if (!d.moved) { setFlipped((f) => !f); return; } // a tap flips the card
+        if (!d.moved) {
+      const now = Date.now();
+      if (now - lastTap.current < DOUBLE_TAP_MS) {
+        // double tap: undo the flip from the first tap, flag the card, move on
+        lastTap.current = 0;
+        setFlipped((f) => !f);
+        setToast(`🔁 Back in ${REVIEW_DAYS} days`);
+        setTimeout(() => setToast(""), 1500);
+        commit("left", true);
+        return;
+      }
+      lastTap.current = now;
+      setFlipped((f) => !f); // a single tap flips the card
+      return;
+    }
     if (dx > THRESH) commit("right");
     else if (dx < -THRESH) commit("left");
     else setDx(0);
@@ -185,6 +213,8 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
         </div>
         <div className="hint hint-left" style={{ opacity: left }}>✗ Still learning</div>
         <div className="hint hint-right" style={{ opacity: right }}>✓ Know it</div>
+          {toast && <div className="toast">{toast}</div>}
+          {review.current[card.id] && review.current[card.id] <= todayStr() && <div className="badge-review">🔁 Review</div>}
       </div>
 
       <div className="actions">
