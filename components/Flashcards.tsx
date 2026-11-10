@@ -4,6 +4,8 @@ import { Card, shuffle } from "@/lib/supabase";
 import { buildSession, markSeen, SESSION_SIZE } from "@/lib/session";
 import { recordCards, useStats } from "@/lib/stats";
 import { GOAL } from "@/lib/streak";
+import { dueToday, listSize, loadReview, recordReviewAnswer } from "@/lib/review";
+import { CYCLE_DAYS } from "@/lib/reviewlogic";
 
 const THRESH = 90; // px to drag before a swipe counts
 
@@ -16,6 +18,10 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
   const [reverse, setReverse] = useState(false);
   const [info, setInfo] = useState({ seenBefore: 0, fresh: 0, total: 0, tracked: false });
   const [loading, setLoading] = useState(true);
+  // 3-day review: card id -> day of the cycle, for the cards queued as reviews in this session
+  const [reviewDay, setReviewDay] = useState<Record<string, number>>({});
+  const [reviewInfo, setReviewInfo] = useState({ due: 0, listed: 0, error: "" });
+  const [rv, setRv] = useState({ started: 0, graduated: 0, restarted: 0 });
 
   // swipe state
   const [dx, setDx] = useState(0);
@@ -31,9 +37,16 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
 
   const startSession = useCallback(async () => {
     setLoading(true);
-    const s = await buildSession(deckId, cardsRef.current);
-    setQueue(s.cards);
+    const { error } = await loadReview(deckId);
+    // cards due for their 3-day review come first; they are kept out of the random pick
+    const due = dueToday(deckId);
+    const dueCards = shuffle(cardsRef.current.filter((c) => due.has(c.id)));
+    const s = await buildSession(deckId, cardsRef.current, new Set(dueCards.map((c) => c.id)));
+    setQueue([...dueCards, ...s.cards]);
     setInfo({ seenBefore: s.seenBefore, fresh: s.fresh, total: s.total, tracked: s.tracked });
+    setReviewDay(Object.fromEntries(dueCards.map((c) => [c.id, due.get(c.id)!.day])));
+    setReviewInfo({ due: dueCards.length, listed: listSize(deckId), error: error ?? "" });
+    setRv({ started: 0, graduated: 0, restarted: 0 });
     setI(0); setFlipped(false); setKnown(0); setMissed([]); setDx(0);
     setLoading(false);
   }, [deckId]);
@@ -53,6 +66,12 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
     if (!card) return;
     if (ok) setKnown((k) => k + 1); else setMissed((m) => [...m, card]);
     if (info.tracked) markSeen(deckId, card.id);
+    // 3-day repetition: left starts a cycle, Day 3 decides whether the card is done
+    const outcome = recordReviewAnswer(deckId, card.id, ok);
+    if (outcome === "started") setRv((r) => ({ ...r, started: r.started + 1 }));
+    if (outcome === "graduated") setRv((r) => ({ ...r, graduated: r.graduated + 1 }));
+    if (outcome === "restarted") setRv((r) => ({ ...r, restarted: r.restarted + 1 }));
+    if (outcome !== "ignored") setReviewInfo((r) => ({ ...r, listed: listSize(deckId) }));
     recordCards(1);
     setFlipped(false);
     setI((x) => x + 1);
@@ -125,6 +144,14 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>Session finished 🎉</h2>
         <p>✅ Knew: {known} &nbsp; ❌ Still learning: {missed.length}</p>
+        {(rv.started > 0 || rv.graduated > 0 || rv.restarted > 0) && (
+          <p className="muted">
+            3-day review:
+            {rv.started > 0 && ` ${rv.started} new word${rv.started > 1 ? "s" : ""} added (Day 1 is tomorrow).`}
+            {rv.graduated > 0 && ` ${rv.graduated} remembered and removed. 🎓`}
+            {rv.restarted > 0 && ` ${rv.restarted} start${rv.restarted > 1 ? "" : "s"} a new 3-day cycle.`}
+          </p>
+        )}
         {info.tracked && (
           <p className="muted">
             {roundComplete
@@ -158,7 +185,15 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
           {goalDone ? "✅ Today's goal done — streak safe" : `Today: ${stats.cards_today} / ${GOAL} cards to keep your streak`}
         </p>
       )}
-      {!info.tracked && <p className="muted">Log in to save progress, streak and lives.</p>}
+      {!info.tracked && <p className="muted">Log in to save progress, streak and lives. (Your review list is saved in this browser.)</p>}
+      {reviewInfo.error && (
+        <p className="err">Review list could not be loaded ({reviewInfo.error}). Run supabase/review.sql in Supabase.</p>
+      )}
+      {reviewInfo.listed > 0 && (
+        <p className="muted" style={{ margin: "0 0 8px" }}>
+          🔁 {reviewInfo.due} review card{reviewInfo.due === 1 ? "" : "s"} due today · {reviewInfo.listed} on your 3-day review list
+        </p>
+      )}
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
         <span className="muted">{i + 1} / {queue.length}</span>
         <div className="row">
@@ -168,7 +203,14 @@ export default function Flashcards({ cards, deckId, active }: { cards: Card[]; d
         </div>
       </div>
       <div className="progress"><div style={{ width: `${(i / queue.length) * 100}%` }} /></div>
-
+      
+      {reviewDay[card.id] && (
+        <p style={{ textAlign: "center", margin: "0 0 4px", fontWeight: 600 }}>
+          🔁 Review · Day {reviewDay[card.id]} of {CYCLE_DAYS}
+          {reviewDay[card.id] === CYCLE_DAYS && <span className="muted"> — final check</span>}
+        </p>
+      )}
+      
       <div className="swipe-wrap"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel}>
         <div className="swipe"

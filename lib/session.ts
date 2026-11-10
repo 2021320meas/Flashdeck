@@ -17,10 +17,10 @@ export type Session = {
  * through the deck. When every card has been seen, a new round starts.
  * Not logged in: just a random 70 (nothing is saved).
  */
-export async function buildSession(deckId: string, all: Card[]): Promise<Session> {
+export async function buildSession(deckId: string, all: Card[], exclude: Set<string> = new Set()): Promise<Session> {
   const { data: auth } = await supabase.auth.getSession();
   if (!auth.session) {
-    const cards = shuffle(all).slice(0, SESSION_SIZE);
+    const cards = shuffle(all.filter((c) => !exclude.has(c.id))).slice(0, SESSION_SIZE);
     return { cards, seenBefore: 0, fresh: cards.length, total: all.length, tracked: false };
   }
 
@@ -35,11 +35,11 @@ export async function buildSession(deckId: string, all: Card[]): Promise<Session
     seenBefore = 0;
   }
 
-  let pick = shuffle(unseen).slice(0, SESSION_SIZE);
+  let pick = shuffle(unseen.filter((c) => !exclude.has(c.id))).slice(0, SESSION_SIZE);
   const fresh = pick.length;
   if (pick.length < SESSION_SIZE) {
     // last session of a round: top up with random already-seen cards
-    const ids = new Set(pick.map((c) => c.id));
+    const ids = new Set([...pick.map((c) => c.id), ...Array.from(exclude)]);
     const extra = shuffle(all.filter((c) => !ids.has(c.id))).slice(0, SESSION_SIZE - pick.length);
     pick = shuffle([...pick, ...extra]);
   }
