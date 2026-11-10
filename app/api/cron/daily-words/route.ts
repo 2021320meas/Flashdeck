@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { todayStr } from "@/lib/dates";
 import { buildPrompt, parseWords, NewCard } from "@/lib/dailywords";
 
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
